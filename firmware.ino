@@ -8,7 +8,7 @@
 #define LIGHT_INPUT 26
 #define LIGHT_OUTPUT 33
 #define ALARM_INPUT 25
-#define ALARM_OUTPUT 12
+#define ALARM_OUTPUT 12 
 #define GATE_INPUT 32
 #define GATE_OUTPUT 13
 
@@ -109,7 +109,7 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(115200, SERIAL_8N1, RXD1, TXD1);
   Serial.println("System Started");
-
+  changePage(0);
   pinMode(LIGHT_INPUT,INPUT);
   pinMode(LIGHT_OUTPUT,OUTPUT);
   pinMode(ALARM_INPUT,INPUT);
@@ -120,21 +120,34 @@ void setup() {
 
 void loop() {
 
-  if (Serial1.available() > 0) {
+  if (Serial1.available() > 0 && (isMaster == false) ) {
     if (checkSyncAndReadPayload(target_addr_high, target_addr_low, extractedPayload, 7, 4)) {
-      isMaster = checkPassWord(extractedPayload,4,master_password);
       Serial.print("isMaster : ");
       Serial.println(isMaster);
       if(checkPassWord(extractedPayload,4,password)){
         Serial.println("password correct !");
         delay(1000);
+        digitalWrite(GATE_OUTPUT,1);
         changePage(0);
-      }else if(isMaster){
+      }else if(checkPassWord(extractedPayload,4,master_password)){
+        isMaster=true;
         changePage(9);
       }else{
         changePage(6);
       }
     }
+  }
+
+  if(Serial1.available() > 0 && isMaster){
+    Serial.println("in the change block ");
+    if(checkSyncAndReadPayload(0x30, 0x00, extractedPayload, 7, 4)){
+      for(int i=0 ; i < 4; i++){
+        password[i]= extractedPayload[i]; 
+      }
+      isMaster = false;
+      delay(1000);
+      changePage(0);
+    } 
   }
 
   int gate = digitalRead(GATE_INPUT);
@@ -158,4 +171,6 @@ void loop() {
   }else{
     digitalWrite(ALARM_OUTPUT,0);
   }
+
+  delay(100);
 }
