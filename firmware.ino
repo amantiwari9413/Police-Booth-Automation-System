@@ -1,17 +1,19 @@
 #include <Arduino.h>
-
 #define RXD1 4
 #define TXD1 15
 #define DWIN_HEADER_H 0x5A
 #define DWIN_HEADER_L 0xA5
-#define GATE 33
-#define LIGHT_INPUT 26
-#define LIGHT_OUTPUT 33
-#define ALARM_INPUT 25
-#define ALARM_OUTPUT 12 
-#define GATE_INPUT 32
-#define GATE_OUTPUT 13
 
+#define LIGHT_INPUT 26  //  brown wire    no light = 1   && light = 0
+#define LIGHT_OUTPUT 13
+
+#define ALARM_INPUT 27  // white wire   vibratio =0
+#define ALARM_OUTPUT 12 
+
+#define INER_LIGHT 25     //  gray wire
+#define INER_LIGHT_OUTPUT 33
+
+#define GATE_OUTPUT 37
 
 uint8_t rcvBuffer[64];
 uint8_t bufIndex = 0;
@@ -23,6 +25,52 @@ const uint8_t target_addr_low = 0x00;
 uint8_t password[4] = {0x00,0x00,0x04,0xD2};
 uint8_t master_password[4] = { 0x49, 0x96, 0x7B, 0x62 }; //1234598754 
 bool isMaster = false;
+
+class DigitalMode {
+  private:
+    int pin;
+    unsigned long sampleInterval;
+    int numSamples;
+
+    unsigned long lastSampleTime = 0;
+    int sampleIndex = 0;
+    int highCount = 0;
+    int lowCount = 0;
+
+    bool resultReady = false;
+    bool result = false;
+
+  public:
+    DigitalMode(int pin, unsigned long interval, int samples = 7)
+      : pin(pin), sampleInterval(interval), numSamples(samples) {
+      pinMode(pin, INPUT_PULLUP);
+    }
+    bool update() {
+      unsigned long now = millis();
+
+      if (now - lastSampleTime < sampleInterval) {
+        return false;
+      }
+
+      lastSampleTime = now;
+      int reading = digitalRead(pin);
+      if (reading == HIGH) highCount++;
+      else                lowCount++;
+      sampleIndex++;
+      if (sampleIndex >= numSamples) {
+        result = (highCount > lowCount);
+        sampleIndex = 0;
+        highCount = 0;
+        lowCount = 0;
+        resultReady = true;
+      }
+      return resultReady;
+    }
+    bool getResult() {
+      resultReady = false;   
+      return result;
+    }
+};
 
 bool checkSyncAndReadPayload(uint8_t add_higher, uint8_t add_lower, uint8_t* payloadContainer, int payload_index, int payload_size) {
 
@@ -89,7 +137,6 @@ bool checkPassWord(uint8_t* payload, int size, uint8_t* password) {
   return true;
 }
 
-
 void changePage(uint16_t pageID) {
   byte command[10];
   command[0] = 0x5A;
@@ -104,30 +151,37 @@ void changePage(uint16_t pageID) {
   command[9] = pageID & 0xFF;
   Serial1.write(command, 10);
 }
+//sensor object 
+
+DigitalMode getInerLight(INER_LIGHT,5,7);
+DigitalMode getOuterLight(LIGHT_INPUT,20,10);
+DigitalMode getAlarm(ALARM_INPUT,5,10);
+
 
 void setup() {
   Serial.begin(115200);
   Serial1.begin(115200, SERIAL_8N1, RXD1, TXD1);
   Serial.println("System Started");
   changePage(0);
-  pinMode(LIGHT_INPUT,INPUT);
+  
   pinMode(LIGHT_OUTPUT,OUTPUT);
-  pinMode(ALARM_INPUT,INPUT);
-  pinMode(ALARM_OUTPUT,OUTPUT);
-  pinMode(GATE_INPUT,INPUT);
+  pinMode(INER_LIGHT_OUTPUT,OUTPUT);
   pinMode(GATE_OUTPUT,OUTPUT);
+  pinMode(ALARM_OUTPUT,OUTPUT);
 }
 
 void loop() {
 
-  if (Serial1.available() > 0 && (isMaster == false) ) {
+  if (Serial1.available() > 0 && !isMaster ) {  
     if (checkSyncAndReadPayload(target_addr_high, target_addr_low, extractedPayload, 7, 4)) {
       Serial.print("isMaster : ");
       Serial.println(isMaster);
       if(checkPassWord(extractedPayload,4,password)){
         Serial.println("password correct !");
+        digitalWrite(GATE_OUTPUT,0);
         delay(1000);
         digitalWrite(GATE_OUTPUT,1);
+        delay(1000);
         changePage(0);
       }else if(checkPassWord(extractedPayload,4,master_password)){
         isMaster=true;
@@ -150,27 +204,28 @@ void loop() {
     } 
   }
 
-  int gate = digitalRead(GATE_INPUT);
-  int light = digitalRead(LIGHT_INPUT);
-  int alarm =digitalRead(ALARM_INPUT);
-
-  if(gate){
-    digitalWrite(GATE_OUTPUT,1);
-  }else{
-    digitalWrite(GATE_OUTPUT,0);
+   // INNER light filter
+  if (getInerLight.update()) {
+    bool state = getInerLight.getResult();
+    Serial.print("Inner Light: ");
+    Serial.println(state);
+    digitalWrite(INER_LIGHT_OUTPUT, state);
   }
 
-  if(light){
-    digitalWrite(LIGHT_OUTPUT,1);
-  }else{
-    digitalWrite(LIGHT_OUTPUT,0);
+  // OUTER light filter
+  if (getOuterLight.update()) {
+    bool state = getOuterLight.getResult();
+    Serial.print("Outer Light: ");
+    Serial.println(state);
+    digitalWrite(LIGHT_OUTPUT, state);
   }
 
-  if(alarm){
-    digitalWrite(ALARM_OUTPUT,1);
-  }else{
-    digitalWrite(ALARM_OUTPUT,0);
+    // OUTER light filter
+  if (getAlarm.update()) {
+    bool state = getAlarm.getResult();
+    Serial.print("Alarm : ");
+    Serial.println(!state);
+    digitalWrite(ALARM_OUTPUT, !state);
   }
 
-  delay(100);
 }
